@@ -8,25 +8,42 @@ struct TorMenuCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") { sessions.newSession() }
-                .keyboardShortcut("t", modifiers: .command)
+            Button("New Tab") {
+                sessions.activeSession?.newTab()
+            }
+            .keyboardShortcut("t", modifiers: [.command])
+
+            Button("New Session") {
+                sessions.newSession()
+            }
+            .keyboardShortcut("n", modifiers: [.command])
         }
 
         CommandGroup(after: .newItem) {
             Button("Close Tab") {
-                if let id = sessions.selectedID { sessions.close(id) }
+                if let session = sessions.activeSession,
+                   let tabID = session.selectedTabID {
+                    session.closeTab(tabID)
+                }
             }
-            .keyboardShortcut("w", modifiers: .command)
+            .keyboardShortcut("w", modifiers: [.command])
+
+            Button("Close Session") {
+                if let id = sessions.selectedSessionID {
+                    sessions.close(id)
+                }
+            }
+            .keyboardShortcut("w", modifiers: [.command, .shift])
         }
 
         CommandMenu("View") {
             Button("Increase Font Size") { onIncreaseFont() }
-                .keyboardShortcut("+", modifiers: .command)
+                .keyboardShortcut("+", modifiers: [.command])
             Button("Decrease Font Size") { onDecreaseFont() }
-                .keyboardShortcut("-", modifiers: .command)
+                .keyboardShortcut("-", modifiers: [.command])
             Divider()
             Button("Clear Buffer") { onClearBuffer() }
-                .keyboardShortcut("k", modifiers: .command)
+                .keyboardShortcut("k", modifiers: [.command])
         }
     }
 }

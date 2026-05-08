@@ -69,12 +69,11 @@ final class TorTerminalView: LocalProcessTerminalView {
         envDict["HOME"] = home
         envDict["PWD"] = home
         envDict["SHELL"] = shell
-        // Hint cols/rows for tools that read $COLUMNS / $LINES instead of
-        // querying the kernel via TIOCGWINSZ. 80/40 keeps `ls` / `tree` /
-        // `git status` from emitting super-wide rows that overflow the
-        // block card's horizontal space and force unsightly wrapping.
-        envDict["COLUMNS"] = "80"
-        envDict["LINES"] = "40"
+        // Don't pre-set COLUMNS / LINES — the dynamic `pinPtySize` push
+        // from `SessionState.updateSize(...)` updates the kernel winsize
+        // on every layout change, and zsh picks that up. Hard-coding env
+        // here would otherwise cause `ls` to honour the stale 80×40 even
+        // after the pane is much wider.
         let env = envDict.map { "\($0.key)=\($0.value)" }
 
         startProcess(executable: shell, args: ["-l"], environment: env, execName: shell)
@@ -234,10 +233,24 @@ final class TorTerminalView: LocalProcessTerminalView {
     /// (e.g. `npm init` Q&A, `claude`, `vim`, `ssh` password prompt).
     func isShellAtPrompt() -> Bool {
         guard process != nil, process.childfd >= 0, process.shellPid > 0 else {
-            return true  // fail-safe: treat as prompt so submits keep working
+            return true
         }
         let fg = tcgetpgrp(process.childfd)
         return fg <= 0 || fg == process.shellPid
+    }
+
+    /// `true` when the foreground program has put the tty into raw mode —
+    /// i.e. cleared `ICANON` so it can read individual keystrokes instead
+    /// of line-buffered input. This is the canonical "I am a TUI" signal:
+    /// vim, htop, less, claude, opencode, ssh password prompt, npm init's
+    /// readline, etc. all flip ICANON off. Plain commands like `ls`,
+    /// `cat`, `node -v` leave it on. Pairs with `isShellAtPrompt()`:
+    /// the latter means "any child", this means "child wanting raw I/O".
+    func childInRawMode() -> Bool {
+        guard process != nil, process.childfd >= 0 else { return false }
+        var attrs = termios()
+        guard tcgetattr(process.childfd, &attrs) == 0 else { return false }
+        return (attrs.c_lflag & UInt(ICANON)) == 0
     }
 
     // MARK: - Hidden-view size pinning

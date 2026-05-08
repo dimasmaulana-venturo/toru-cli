@@ -1,26 +1,48 @@
 import SwiftUI
 
-/// Vertical scroll of `Block` cards. Bottom-anchored like a chat thread:
-/// the newest block sits just above the input bar; older blocks scroll up
-/// out of view. With `defaultScrollAnchor(.bottom)` SwiftUI keeps the
-/// trailing content pinned automatically — no manual `scrollTo` needed.
+/// Vertical scroll of `Block` cards, bottom-anchored. Auto-scrolls to the
+/// newest block whenever:
+///   - a new block is appended (count changes), or
+///   - the running block keeps streaming bytes (last block's output grows).
 struct BlockListView: View {
-    @ObservedObject var store: BlockStore
-    let onRerun: (Block) -> Void
-    let onDelete: (Block) -> Void
+    @ObservedObject var blockStore: BlockStore
+    var isLocked: Bool = false
+    var onRerun: ((Block) -> Void)? = nil
+    var onDelete: ((Block) -> Void)? = nil
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 6) {
-                ForEach(store.blocks) { block in
-                    BlockRowView(block: block, onRerun: onRerun, onDelete: onDelete)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(blockStore.blocks) { block in
+                        BlockRowView(
+                            block: block,
+                            isLocked: isLocked,
+                            onRerun: onRerun,
+                            onDelete: onDelete
+                        )
                         .id(block.id)
+                        // Each card stretches to the full pane width.
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity)
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: blockStore.blocks.count) {
+                guard let last = blockStore.blocks.last else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: blockStore.streamTick) {
+                // Coalesced streaming bump — pin to bottom without a
+                // sliding animation so it feels smooth, not janky.
+                guard let last = blockStore.blocks.last else { return }
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
         }
-        .defaultScrollAnchor(.bottom)
     }
 }

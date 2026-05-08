@@ -1,102 +1,141 @@
 import SwiftUI
 import AppKit
 
-/// One block rendered as a Warp-style card: command header, thin divider,
-/// monospaced output, hover-only ellipsis menu, animated bottom strip
-/// while running.
+/// One block rendered as a Warp-style card, with two special variants:
+///
+/// 1. **Marker block** — `command` starts with `"───"`. Renders as a
+///    centred italic divider label (e.g. "─── session resumed ───"
+///    after exiting full-TUI). No header chrome, no hover, no actions.
+///
+/// 2. **Locked card** — `isLocked == true`. The user is in
+///    `.inlineInteractive` mode: hover ellipsis menu, re-run, delete and
+///    text selection are suppressed. A "waiting for input…" pill replaces
+///    the spinner. The card border tints orange.
 struct BlockRowView: View {
     @ObservedObject var block: Block
-    let onRerun: (Block) -> Void
-    let onDelete: (Block) -> Void
+    var isLocked: Bool = false
+    var onRerun: ((Block) -> Void)? = nil
+    var onDelete: ((Block) -> Void)? = nil
 
     @State private var hovering = false
-    @State private var pulse = false
+
+    private var isMarker: Bool { block.command.hasPrefix("───") }
 
     var body: some View {
+        if isMarker {
+            markerBody
+        } else {
+            cardBody
+        }
+    }
+
+    // MARK: - Marker
+
+    private var markerBody: some View {
+        Text(block.command)
+            .font(.system(size: 11).italic())
+            .foregroundStyle(Color.secondary.opacity(0.45))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+    }
+
+    // MARK: - Normal card
+
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+
             if !block.output.isEmpty {
                 Rectangle()
                     .fill(Color.white.opacity(0.06))
                     .frame(height: 1)
-                    .padding(.top, 6)
-                    .padding(.bottom, 8)
+
                 outputBody
             }
+
             if block.isRunning {
-                runningStrip
+                Rectangle()
+                    .fill(isLocked ? Color.orange.opacity(0.5) : Color.teal.opacity(0.4))
+                    .frame(height: 2)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        // Stretch the card to fill the available list width so output
+        // doesn't shrink-wrap to its content.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 8)
                 .fill(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(borderColor, lineWidth: 1)
+                )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 1)
-        )
-        .onHover { hovering = $0 }
-        .contextMenu {
-            Button("Copy command") { copy(block.command) }
-            Button("Copy output")  { copy(block.output) }
-            Button("Copy both")    { copy(combined()) }
-            Divider()
-            Button("Re-run") { onRerun(block) }
-            Divider()
-            Button("Delete", role: .destructive) { onDelete(block) }
+        .onHover { value in
+            hovering = isLocked ? false : value
         }
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(spacing: 6) {
             Text(">")
                 .foregroundStyle(Color.teal)
                 .font(.system(size: 13, design: .monospaced))
-            Text(block.command)
-                .font(.system(size: 13, design: .monospaced).weight(.semibold))
-                .foregroundStyle(commandColor)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
-            statusIndicator
-            ellipsisMenu
+
+            Group {
+                if isLocked {
+                    Text(block.command)
+                        .textSelection(.disabled)
+                } else {
+                    Text(block.command)
+                        .textSelection(.enabled)
+                }
+            }
+            .font(.system(size: 13, design: .monospaced).weight(.semibold))
+            .foregroundStyle(commandColor)
+
+            Spacer()
+
+            // Status / state indicators.
+            if block.isRunning && isLocked {
+                Text("waiting for input…")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.orange.opacity(0.85))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.12))
+                    .clipShape(Capsule())
+            } else if block.isRunning {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 16, height: 16)
+            }
+
+            // Ellipsis menu — only when *not* locked AND not running.
+            if !isLocked && !block.isRunning {
+                ellipsisMenu
+            }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(commandFailed ? Color.red.opacity(0.15) : Color.clear)
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(commandFailed ? Color.red.opacity(0.08) : Color.clear)
     }
 
-    @ViewBuilder
-    private var statusIndicator: some View {
-        if block.isRunning {
-            ProgressView()
-                .controlSize(.mini)
-                .scaleEffect(0.6)
-                .frame(width: 12, height: 12)
-        }
-    }
-
-    @ViewBuilder
     private var ellipsisMenu: some View {
         Menu {
             Button("Copy command") { copy(block.command) }
             Button("Copy output")  { copy(block.output) }
-            Button("Copy both")    { copy(combined()) }
+            Button("Copy both")    { copy("> \(block.command)\n\(block.output)") }
             Divider()
-            Button("Re-run") { onRerun(block) }
+            Button("Re-run")       { onRerun?(block) }
             Divider()
-            Button("Delete", role: .destructive) { onDelete(block) }
+            Button("Delete", role: .destructive) { onDelete?(block) }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 24, height: 24)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
@@ -109,19 +148,71 @@ struct BlockRowView: View {
 
     // MARK: - Output
 
+    @ViewBuilder
     private var outputBody: some View {
-        // Replace runs of 2+ spaces (column padding from `ls`, `tree`,
-        // `git status`, …) with NBSPs so SwiftUI keeps them at wrap
-        // boundaries. Single spaces stay regular so word wrap still
-        // works on prose output.
-        Text(preserveColumnPadding(block.output))
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(Color(nsColor: .labelColor).opacity(0.85))
-            .textSelection(.enabled)
-            .lineLimit(nil)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
+        // BSD `ls` separates columns with `\t` and relies on the terminal's
+        // 8-char tab stops to align them. SwiftUI's `Text` doesn't honour
+        // tab stops, so we expand tabs to the right number of spaces here.
+        let rendered = expandTabs(block.output)
+        Group {
+            if isLocked {
+                Text(rendered).textSelection(.disabled)
+            } else {
+                Text(rendered).textSelection(.enabled)
+            }
+        }
+        .font(.system(size: 12, design: .monospaced))
+        .foregroundStyle(Color(nsColor: .labelColor).opacity(0.85))
+        .lineLimit(nil)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
+    /// Expand `\t` to the next 8-column tab stop so column-aligned output
+    /// (`ls`, `tree`, `git status`) lines up under a monospaced font.
+    private func expandTabs(_ s: String, tabWidth: Int = 8) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        var col = 0
+        for c in s {
+            switch c {
+            case "\t":
+                let spaces = tabWidth - (col % tabWidth)
+                out.append(String(repeating: " ", count: spaces))
+                col += spaces
+            case "\n":
+                out.append(c)
+                col = 0
+            default:
+                out.append(c)
+                col += 1
+            }
+        }
+        return out
+    }
+
+    // MARK: - Helpers
+
+    private var commandFailed: Bool {
+        if let code = block.exitCode, code != 0 { return true }
+        return false
+    }
+
+    private var commandColor: Color {
+        commandFailed ? Color.red.opacity(0.9) : Color.primary
+    }
+
+    private var borderColor: Color {
+        if block.isRunning && isLocked { return Color.orange.opacity(0.4) }
+        return Color.white.opacity(0.06)
+    }
+
+    private func copy(_ s: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(s, forType: .string)
     }
 
     private func preserveColumnPadding(_ s: String) -> String {
@@ -152,40 +243,5 @@ struct BlockRowView: View {
         } else {
             out.append(String(repeating: "\u{00A0}", count: run))
         }
-    }
-
-    // MARK: - Running indicator
-
-    private var runningStrip: some View {
-        Rectangle()
-            .fill(Color.teal.opacity(pulse ? 0.4 : 0.15))
-            .frame(height: 2)
-            .padding(.top, 6)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    pulse = true
-                }
-            }
-    }
-
-    // MARK: - Helpers
-
-    private var commandFailed: Bool {
-        if let code = block.exitCode { return code != 0 }
-        return false
-    }
-
-    private var commandColor: Color {
-        commandFailed ? Color.red.opacity(0.9) : Color(nsColor: .labelColor)
-    }
-
-    private func copy(_ s: String) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(s, forType: .string)
-    }
-
-    private func combined() -> String {
-        "> \(block.command)\n\(block.output)"
     }
 }
