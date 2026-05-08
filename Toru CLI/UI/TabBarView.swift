@@ -1,96 +1,109 @@
 import SwiftUI
 import AppKit
 
-/// Tab strip across the top of the active `Session`'s pane. Each tab is a
-/// `TabState` (one shell). Click to switch active tab; "+" appends a new
-/// tab to the current session.
-struct TabBarView: View {
+/// Finder-style tab strip rendered below the window toolbar when the
+/// active session has 2+ tabs. Each tab takes equal width, has a close
+/// `×` on the left (visible on hover or when active), and the active
+/// tab is highlighted while inactive tabs are separated by hairline
+/// vertical dividers.
+struct TabStripView: View {
     @ObservedObject var session: Session
 
     var body: some View {
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(session.tabs) { tab in
-                        TabChip(
-                            tab: tab,
-                            isActive: tab.id == session.selectedTabID,
-                            canClose: session.tabs.count > 1,
-                            onSelect: {
-                                DispatchQueue.main.async {
-                                    session.selectedTabID = tab.id
-                                }
-                            },
-                            onClose: { session.closeTab(tab.id) }
-                        )
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+            ForEach(Array(session.tabs.enumerated()), id: \.element.id) { idx, tab in
+                FinderTab(
+                    tab: tab,
+                    isActive: tab.id == session.selectedTabID,
+                    showLeadingDivider: shouldShowLeadingDivider(at: idx),
+                    onSelect: {
+                        DispatchQueue.main.async {
+                            session.selectedTabID = tab.id
+                        }
+                    },
+                    onClose: { session.closeTab(tab.id) }
+                )
+                .frame(maxWidth: .infinity)
             }
-
-            Button {
-                session.newTab()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .medium))
-                    .frame(width: 28, height: 24)
-            }
-            .buttonStyle(.plain)
-            .help("New tab (⌘T)")
-            .keyboardShortcut("t", modifiers: [.command])
-            .padding(.trailing, 6)
         }
-        .frame(height: 32)
-        .background(.ultraThinMaterial)
+        .frame(height: 28)
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.white.opacity(0.06))
                 .frame(height: 1)
         }
     }
+
+    /// Show a divider on the leading edge of a tab when neither it nor
+    /// its left neighbor is the active tab — matches Finder's behavior.
+    private func shouldShowLeadingDivider(at idx: Int) -> Bool {
+        guard idx > 0 else { return false }
+        let cur = session.tabs[idx]
+        let prev = session.tabs[idx - 1]
+        return cur.id != session.selectedTabID && prev.id != session.selectedTabID
+    }
 }
 
-private struct TabChip: View {
+private struct FinderTab: View {
     @ObservedObject var tab: TabState
     let isActive: Bool
-    let canClose: Bool
+    let showLeadingDivider: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .font(.system(size: 10))
-                .foregroundStyle(isActive ? Color.teal : Color.secondary)
-            Text(tab.title)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(isActive ? Color.primary : Color.secondary)
-                .lineLimit(1)
-            if canClose && (hovering || isActive) {
+        ZStack {
+            // Background fill (active tab lighter).
+            Rectangle()
+                .fill(isActive
+                      ? Color.white.opacity(0.08)
+                      : (hovering ? Color.white.opacity(0.03) : Color.clear))
+
+            // Centered title; close button overlays at leading edge.
+            HStack {
+                Spacer()
+                Text(tab.title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isActive ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 28)
+
+            HStack {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .medium))
+                        .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 14, height: 14)
+                        .frame(width: 16, height: 16)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(hovering ? 0.10 : 0))
+                        )
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .opacity((hovering || isActive) ? 1 : 0)
+                .padding(.leading, 8)
                 .help("Close tab")
+                Spacer()
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(isActive
-                      ? Color.white.opacity(0.10)
-                      : (hovering ? Color.white.opacity(0.04) : Color.clear))
-        )
+        .overlay(alignment: .leading) {
+            if showLeadingDivider {
+                Rectangle()
+                    .fill(Color.white.opacity(0.10))
+                    .frame(width: 1)
+                    .padding(.vertical, 6)
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { onSelect() }
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+        .animation(.easeInOut(duration: 0.12), value: isActive)
     }
 }

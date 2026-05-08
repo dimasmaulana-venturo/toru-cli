@@ -79,6 +79,25 @@ final class HistoryDatabase {
         }
     }
 
+    /// Distinct commands ordered newest-first whose `command` starts with
+    /// `prefix`. Empty prefix returns all distinct commands. Used by the
+    /// input bar's up/down arrow navigation (Warp-style prefix recall).
+    func recentMatching(prefix: String, limit: Int = 100) -> [String] {
+        let pattern = prefix.isEmpty ? "%" : "\(escapeLike(prefix))%"
+        return (try? queue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT command FROM (
+                    SELECT command, MAX(executedAt) AS latest
+                    FROM commandHistory
+                    WHERE command LIKE ? ESCAPE '\\'
+                    GROUP BY command
+                    ORDER BY latest DESC
+                    LIMIT ?
+                )
+                """, arguments: [pattern, limit])
+        }) ?? []
+    }
+
     func mostRecentMatching(prefix: String) -> String? {
         guard !prefix.isEmpty else { return nil }
         return (try? queue.read { db in

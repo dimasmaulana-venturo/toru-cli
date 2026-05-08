@@ -1,31 +1,29 @@
 import Foundation
 import SwiftUI
 
-/// One command + its output. Output streams in via `append(_:)` while the
-/// command runs (coalesced through a 60fps notify) and stops growing
-/// after `markDone(exitCode:)`.
+/// One command + its attributed output. Output is an `AttributedString`
+/// so per-run color attributes from the ANSI renderer are preserved when
+/// SwiftUI's `Text` renders it.
 @MainActor
 final class Block: Identifiable, ObservableObject {
     let id = UUID()
     let command: String
     let startedAt = Date()
 
-    @Published var output: String = ""
+    @Published var output: AttributedString = AttributedString()
     @Published var isRunning: Bool = true
     @Published var exitCode: Int? = nil
 
     private var notifyScheduled = false
 
-    init(command: String, output: String = "", isRunning: Bool = true) {
+    init(command: String, output: AttributedString = AttributedString(), isRunning: Bool = true) {
         self.command = command
         self.output = output
         self.isRunning = isRunning
     }
 
-    /// Append a chunk to `output`, coalescing notifies at ~60fps so the
-    /// SwiftUI list isn't rebuilt on every PTY byte.
-    func append(_ chunk: String) {
-        guard !chunk.isEmpty else { return }
+    func append(_ chunk: AttributedString) {
+        guard !chunk.characters.isEmpty else { return }
         output.append(chunk)
         scheduleNotify()
     }
@@ -51,22 +49,15 @@ final class Block: Identifiable, ObservableObject {
 final class BlockStore: ObservableObject {
     @Published private(set) var blocks: [Block] = []
 
-    /// Coalesced stream-tick. SwiftUI views observing `BlockStore`
-    /// (e.g. `BlockListView`) re-evaluate when `blocks` changes — but
-    /// internal mutation of `Block.output` only fires that block's own
-    /// `objectWillChange`, not the store's. Bumping this counter at
-    /// ~10/sec gives `.onChange(of: streamTick)` a hook for things like
-    /// auto-scroll-to-bottom while a long-running command streams.
     @Published private(set) var streamTick: Int = 0
     private var streamTickScheduled = false
 
-    /// Open a new running block (output empty until bytes stream in).
     func startBlock(command: String) {
         blocks.append(Block(command: command))
     }
 
-    /// Live-append a chunk into the most recent running block.
-    func appendToCurrent(_ chunk: String) {
+    /// Live-append a styled chunk into the most recent running block.
+    func appendToCurrent(_ chunk: AttributedString) {
         blocks.last?.append(chunk)
         scheduleStreamTick()
     }
@@ -81,22 +72,9 @@ final class BlockStore: ObservableObject {
         }
     }
 
-    /// Mark the most recent block as finished. Republishes the store so
-    /// SwiftUI observers (e.g. `InputBarView`) react.
     func markCurrentDone(exitCode: Int? = nil) {
         guard let cur = blocks.last, cur.isRunning else { return }
         cur.markDone(exitCode: exitCode)
-        objectWillChange.send()
-    }
-
-    /// Replace the running block's output in one shot and mark it done.
-    /// Currently unused; kept for parity with the old commit-on-finish
-    /// flow in case a future change wants atomic capture.
-    func finishCurrentBlock(output: String, exitCode: Int) {
-        guard let cur = blocks.last, cur.isRunning else { return }
-        cur.output = output
-        cur.exitCode = exitCode
-        cur.isRunning = false
         objectWillChange.send()
     }
 
@@ -110,8 +88,13 @@ final class BlockStore: ObservableObject {
 
     func clear() { clearAll() }
 
-    /// "─── session resumed ───" divider after a fullTUI exit.
+    /// Marker block ("─── session resumed ───" after fullTUI exit).
+    /// Stored as plain attributed string with no styling.
     func appendMarker(_ text: String) {
-        blocks.append(Block(command: text, output: "", isRunning: false))
+        var styled = AttributedString(text)
+        styled.foregroundColor = .secondary
+        let m = Block(command: text, output: AttributedString(), isRunning: false)
+        blocks.append(m)
+        _ = styled
     }
 }

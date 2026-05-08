@@ -7,14 +7,24 @@ import SwiftUI
 struct BlockListView: View {
     @ObservedObject var blockStore: BlockStore
     var isLocked: Bool = false
+    var searchQuery: String = ""
     var onRerun: ((Block) -> Void)? = nil
     var onDelete: ((Block) -> Void)? = nil
+
+    private var visibleBlocks: [Block] {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return blockStore.blocks }
+        return blockStore.blocks.filter { block in
+            block.command.lowercased().contains(q) ||
+            String(block.output.characters).lowercased().contains(q)
+        }
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
-                    ForEach(blockStore.blocks) { block in
+                    ForEach(visibleBlocks) { block in
                         BlockRowView(
                             block: block,
                             isLocked: isLocked,
@@ -22,7 +32,6 @@ struct BlockListView: View {
                             onDelete: onDelete
                         )
                         .id(block.id)
-                        // Each card stretches to the full pane width.
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -38,8 +47,6 @@ struct BlockListView: View {
                 }
             }
             .onChange(of: blockStore.streamTick) {
-                // Coalesced streaming bump — pin to bottom without a
-                // sliding animation so it feels smooth, not janky.
                 guard let last = blockStore.blocks.last else { return }
                 proxy.scrollTo(last.id, anchor: .bottom)
             }

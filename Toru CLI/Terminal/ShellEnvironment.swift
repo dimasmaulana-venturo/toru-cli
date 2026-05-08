@@ -99,17 +99,26 @@ enum ShellEnvironment {
     unsetopt zle 2>/dev/null
     stty -echo 2>/dev/null
 
+    # 2b. Suppress the trailing "%" zsh prints when the previous output
+    #     didn't end with a newline. Both options together stop it from
+    #     being printed and from inserting a CR/spaces filler line.
+    unsetopt PROMPT_CR PROMPT_SP 2>/dev/null
+
+    # 2c. ls colors: BSD ls reads $CLICOLOR + $LSCOLORS for tinting.
+    #     Plus `alias ls='ls -G'` for newer paths that need the explicit flag.
+    export CLICOLOR=1
+    export LSCOLORS=ExGxBxDxCxEgEdxbxgxcxd
+    alias ls='ls -G'
+
     # 3. Empty prompts. Toru renders chrome in SwiftUI; the shell shouldn't
-    #    paint anything between commands. Override every cycle so frameworks
-    #    (powerlevel10k, starship, …) that mutate PROMPT inside their own
-    #    precmd cannot reintroduce a visible prompt.
+    #    paint anything between commands.
     autoload -Uz add-zsh-hook
     __toru_clear_prompts() {
         PROMPT=''
         PROMPT2=''
         RPROMPT=''
-        # Re-assert ZLE off in case a framework re-enabled it.
         unsetopt zle 2>/dev/null
+        unsetopt PROMPT_CR PROMPT_SP 2>/dev/null
     }
     __toru_clear_prompts
     add-zsh-hook -d precmd __toru_clear_prompts 2>/dev/null

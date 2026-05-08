@@ -45,7 +45,7 @@ struct BlockRowView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
 
-            if !block.output.isEmpty {
+            if !block.output.characters.isEmpty {
                 Rectangle()
                     .fill(Color.white.opacity(0.06))
                     .frame(height: 1)
@@ -59,20 +59,29 @@ struct BlockRowView: View {
                     .frame(height: 2)
             }
         }
-        // Stretch the card to fill the available list width so output
-        // doesn't shrink-wrap to its content.
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+                .fill(cardFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(borderColor, lineWidth: 1)
+                        .strokeBorder(cardBorder, lineWidth: 1)
                 )
         )
         .onHover { value in
             hovering = isLocked ? false : value
         }
+    }
+
+    private var cardFill: Color {
+        if commandFailed { return Color.red.opacity(0.10) }
+        return Color(nsColor: .windowBackgroundColor).opacity(0.6)
+    }
+
+    private var cardBorder: Color {
+        if commandFailed { return Color.red.opacity(0.35) }
+        if block.isRunning && isLocked { return Color.orange.opacity(0.4) }
+        return Color.white.opacity(0.06)
     }
 
     // MARK: - Header
@@ -119,14 +128,13 @@ struct BlockRowView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(commandFailed ? Color.red.opacity(0.08) : Color.clear)
     }
 
     private var ellipsisMenu: some View {
         Menu {
             Button("Copy command") { copy(block.command) }
-            Button("Copy output")  { copy(block.output) }
-            Button("Copy both")    { copy("> \(block.command)\n\(block.output)") }
+            Button("Copy output")  { copy(String(block.output.characters)) }
+            Button("Copy both")    { copy("> \(block.command)\n\(String(block.output.characters))") }
             Divider()
             Button("Re-run")       { onRerun?(block) }
             Divider()
@@ -150,47 +158,23 @@ struct BlockRowView: View {
 
     @ViewBuilder
     private var outputBody: some View {
-        // BSD `ls` separates columns with `\t` and relies on the terminal's
-        // 8-char tab stops to align them. SwiftUI's `Text` doesn't honour
-        // tab stops, so we expand tabs to the right number of spaces here.
-        let rendered = expandTabs(block.output)
+        // `block.output` is an `AttributedString` produced by
+        // `AnsiAttributedRenderer` — SGR colors / bold / italic /
+        // underline are baked into per-run attributes. Tabs are already
+        // expanded inside the renderer.
         Group {
             if isLocked {
-                Text(rendered).textSelection(.disabled)
+                Text(block.output).textSelection(.disabled)
             } else {
-                Text(rendered).textSelection(.enabled)
+                Text(block.output).textSelection(.enabled)
             }
         }
         .font(.system(size: 12, design: .monospaced))
-        .foregroundStyle(Color(nsColor: .labelColor).opacity(0.85))
         .lineLimit(nil)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-    }
-
-    /// Expand `\t` to the next 8-column tab stop so column-aligned output
-    /// (`ls`, `tree`, `git status`) lines up under a monospaced font.
-    private func expandTabs(_ s: String, tabWidth: Int = 8) -> String {
-        var out = ""
-        out.reserveCapacity(s.count)
-        var col = 0
-        for c in s {
-            switch c {
-            case "\t":
-                let spaces = tabWidth - (col % tabWidth)
-                out.append(String(repeating: " ", count: spaces))
-                col += spaces
-            case "\n":
-                out.append(c)
-                col = 0
-            default:
-                out.append(c)
-                col += 1
-            }
-        }
-        return out
     }
 
     // MARK: - Helpers
