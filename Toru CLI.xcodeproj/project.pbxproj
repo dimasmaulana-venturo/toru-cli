@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		94509500AA0001000085ACCB /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 94509502AA0001000085ACCB /* SwiftTerm */; };
+		94509501AA0001000085ACCB /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 94509503AA0001000085ACCB /* GRDB */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		9450947B2FAD97B40085ACCB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				94509500AA0001000085ACCB /* SwiftTerm in Frameworks */,
+				94509501AA0001000085ACCB /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,8 @@
 			);
 			name = "Toru CLI";
 			packageProductDependencies = (
+				94509502AA0001000085ACCB /* SwiftTerm */,
+				94509503AA0001000085ACCB /* GRDB */,
 			);
 			productName = "Toru CLI";
 			productReference = 9450946C2FAD97B20085ACCB /* Toru CLI.app */;
@@ -195,6 +204,10 @@
 			);
 			mainGroup = 945094632FAD97B20085ACCB;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				945094A0AA0001000085ACCB /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				945094A1AA0001000085ACCB /* XCRemoteSwiftPackageReference "GRDB" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9450946D2FAD97B20085ACCB /* Products */;
 			projectDirPath = "";
@@ -551,6 +564,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		945094A0AA0001000085ACCB /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.2.0;
+			};
+		};
+		945094A1AA0001000085ACCB /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.29.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		94509502AA0001000085ACCB /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 945094A0AA0001000085ACCB /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		94509503AA0001000085ACCB /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 945094A1AA0001000085ACCB /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 945094642FAD97B20085ACCB /* Project object */;
 }

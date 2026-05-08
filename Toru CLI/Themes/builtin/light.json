@@ -1,0 +1,10 @@
+{
+  "name": "Light",
+  "background": "#ffffff",
+  "foreground": "#1a1a1a",
+  "cursor": "#000000",
+  "ansi": [
+    "#000000","#c91b00","#00c200","#c7c400","#0037da","#c930c7","#00c5c7","#c7c7c7",
+    "#676767","#ff6d67","#5ff967","#fefb67","#6871ff","#ff76ff","#5ffdff","#feffff"
+  ]
+}
