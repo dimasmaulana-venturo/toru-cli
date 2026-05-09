@@ -148,15 +148,15 @@ jobs:
           draft: false
           prerelease: false
 
-      # Bumps the Homebrew Cask in `dimsmaul/homebrew-toru` so users get
-      # `brew install --cask dimsmaul/toru/toru-cli` without ever seeing
-      # Gatekeeper's "couldn't verify" warning. Homebrew strips the
-      # quarantine attribute on cask installs, which is the legal,
+      # Bumps the Homebrew Cask in `dimsmaul/homebrew-toru-cli` so users
+      # get `brew install --cask dimsmaul/toru-cli/toru-cli` without ever
+      # seeing Gatekeeper's "couldn't verify" warning. Homebrew strips
+      # the quarantine attribute on cask installs, which is the legal,
       # zero-cost equivalent of right-click → Open.
       #
       # Required secret: `HOMEBREW_TAP_TOKEN`
       #   - Fine-grained PAT
-      #   - Repository access: only `dimsmaul/homebrew-toru`
+      #   - Repository access: only `dimsmaul/homebrew-toru-cli`
       #   - Permissions: Contents → Read and write
       - name: Bump Homebrew Cask (tags only)
         if: startsWith(github.ref, 'refs/tags/')
@@ -166,7 +166,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.label }}
           REPO_OWNER: dimsmaul
           REPO_NAME: toru-cli
-          TAP_REPO: dimsmaul/homebrew-toru
+          TAP_REPO: dimsmaul/homebrew-toru-cli
         run: |
           set -euo pipefail
 

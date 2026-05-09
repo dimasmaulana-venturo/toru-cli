@@ -7,7 +7,7 @@ Homebrew strips the quarantine attribute when installing casks, which is the leg
 End result for users:
 
 ```bash
-brew install --cask dimsmaul/toru/toru-cli
+brew install --cask dimsmaul/toru-cli/toru-cli
 ```
 
 …and the app launches without any security prompt.
@@ -29,10 +29,10 @@ A Homebrew "tap" is just a GitHub repo whose name starts with `homebrew-`. Homeb
 After this, users will install via:
 
 ```bash
-brew install --cask dimsmaul/toru/toru-cli
+brew install --cask dimsmaul/toru-cli/toru-cli
 ```
 
-The `dimsmaul/toru` part is shorthand for `dimsmaul/homebrew-toru`.
+The `dimsmaul/toru-cli` prefix is Homebrew shorthand for `github.com/dimsmaul/homebrew-toru-cli`.
 
 ### 2. Create a fine-grained Personal Access Token
 
@@ -42,7 +42,7 @@ The release workflow needs to push commits into `homebrew-toru`. The default `GI
 2. Name: `toru-homebrew-tap`.
 3. Expiration: 1 year (or whatever fits your rotation policy).
 4. Resource owner: your account (`dimsmaul`).
-5. Repository access: **Only select repositories** → `dimsmaul/homebrew-toru`.
+5. Repository access: **Only select repositories** → `dimsmaul/homebrew-toru-cli`.
 6. Permissions → Repository permissions:
    - **Contents**: Read and write
    - Everything else: leave at default (No access).
@@ -66,7 +66,7 @@ For every `v*` tag pushed to `dimsmaul/toru-cli`:
 
 1. Build the `.app` and package it as a DMG (existing behavior).
 2. Compute the DMG's SHA-256.
-3. Clone `dimsmaul/homebrew-toru` using the PAT.
+3. Clone `dimsmaul/homebrew-toru-cli` using the PAT.
 4. Generate a new `Casks/toru-cli.rb` with the version and SHA filled in.
 5. Commit + push as `github-actions[bot]`.
 
@@ -110,17 +110,17 @@ You can validate the cask without going through CI:
 
 ```bash
 # Clone the tap
-git clone https://github.com/dimsmaul/homebrew-toru ~/dev/homebrew-toru
+git clone https://github.com/dimsmaul/homebrew-toru-cli ~/dev/homebrew-toru-cli
 
 # Hand-edit Casks/toru-cli.rb against an existing release
 cd ~/dev/homebrew-toru
 
 # Tap the local copy
-brew tap-new dimsmaul/toru --no-git || true
-brew tap dimsmaul/toru "$PWD"
+brew tap-new dimsmaul/toru-cli --no-git || true
+brew tap dimsmaul/toru-cli "$PWD"
 
 # Install
-brew install --cask dimsmaul/toru/toru-cli
+brew install --cask dimsmaul/toru-cli/toru-cli
 
 # Check that quarantine was stripped
 xattr -p com.apple.quarantine /Applications/Toru\ CLI.app
@@ -139,7 +139,7 @@ Add this to the project README so users see it first:
 ## Install
 
 ```bash
-brew install --cask dimsmaul/toru/toru-cli
+brew install --cask dimsmaul/toru-cli/toru-cli
 ```
 
 If you don't have Homebrew, grab the latest DMG from
