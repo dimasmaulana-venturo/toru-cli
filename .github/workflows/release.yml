@@ -8,8 +8,18 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
+      bump:
+        description: "Auto-bump latest semver tag. `none` = artifact-only, no Release. `patch/minor/major` = bump tag, build, publish Release."
+        required: false
+        default: "none"
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
       version:
-        description: "Version label baked into the DMG filename (defaults to short SHA). Manual runs do NOT publish a Release."
+        description: "(only when bump = none) Custom label baked into the DMG filename. Defaults to short SHA. Sanitized to [A-Za-z0-9._-]."
         required: false
         default: ""
 
@@ -52,11 +62,38 @@ jobs:
           REF:           ${{ github.ref }}
           REF_NAME:      ${{ github.ref_name }}
           COMMIT_MSG:    ${{ github.event.head_commit.message }}
+          INPUT_BUMP:    ${{ github.event.inputs.bump }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
 
           sanitize() { printf "%s" "$1" | tr -cd 'A-Za-z0-9._-'; }
+
+          # Helper: bump latest `v*` tag, push it, set outputs.
+          # Args: $1 = bump kind (major|minor|patch).
+          do_bump() {
+            local KIND="$1"
+            local LATEST CUR MAJ MIN PAT NEW
+            LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1 || true)
+            [[ -n "$LATEST" ]] || LATEST="v0.0.0"
+            CUR="${LATEST#v}"
+            IFS='.' read -r MAJ MIN PAT <<<"$CUR"
+            MAJ=${MAJ:-0}; MIN=${MIN:-0}; PAT=${PAT:-0}
+            case "$KIND" in
+              major) MAJ=$((MAJ + 1)); MIN=0; PAT=0;;
+              minor) MIN=$((MIN + 1)); PAT=0;;
+              patch) PAT=$((PAT + 1));;
+              *) echo "::error::unknown bump kind '$KIND'"; exit 1;;
+            esac
+            NEW="v${MAJ}.${MIN}.${PAT}"
+            echo "Bumping ${LATEST} → ${NEW}"
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "$NEW"
+            git push origin "$NEW"
+            echo "version=$NEW"     >> "$GITHUB_OUTPUT"
+            echo "is_release=true"  >> "$GITHUB_OUTPUT"
+          }
 
           # ---- Case 1: pushed tag --------------------------------------
           if [[ "$EVENT_NAME" == "push" && "$REF" == refs/tags/* ]]; then
@@ -67,7 +104,17 @@ jobs:
           fi
 
           # ---- Case 2: workflow_dispatch -------------------------------
+          # Two sub-modes:
+          #   bump = none  → artifact-only build, label = INPUT_VERSION
+          #                  (or short SHA if blank). No Release.
+          #   bump = patch/minor/major → real release: bump latest tag,
+          #                  build, publish.
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            BUMP="${INPUT_BUMP:-none}"
+            if [[ "$BUMP" == "patch" || "$BUMP" == "minor" || "$BUMP" == "major" ]]; then
+              do_bump "$BUMP"
+              exit 0
+            fi
             LABEL=$(sanitize "${INPUT_VERSION:-}")
             [[ -n "$LABEL" ]] || LABEL="${GITHUB_SHA::7}"
             echo "version=$LABEL"     >> "$GITHUB_OUTPUT"
@@ -94,31 +141,7 @@ jobs:
             exit 0
           fi
 
-          # Latest semver tag, fallback v0.0.0 if none.
-          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1 || true)
-          [[ -n "$LATEST" ]] || LATEST="v0.0.0"
-          CUR="${LATEST#v}"
-          IFS='.' read -r MAJ MIN PAT <<<"$CUR"
-          MAJ=${MAJ:-0}; MIN=${MIN:-0}; PAT=${PAT:-0}
-          case "$BUMP" in
-            major) MAJ=$((MAJ + 1)); MIN=0; PAT=0;;
-            minor) MIN=$((MIN + 1)); PAT=0;;
-            patch) PAT=$((PAT + 1));;
-          esac
-          NEW="v${MAJ}.${MIN}.${PAT}"
-          echo "Bumping ${LATEST} → ${NEW}"
-
-          # Pushing with the default GITHUB_TOKEN does NOT cascade into a
-          # second workflow run (per GitHub's recursion guard), so the
-          # rest of THIS run will keep going via `needs: prepare` and
-          # build the new tag without firing a duplicate.
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "$NEW"
-          git push origin "$NEW"
-
-          echo "version=$NEW"       >> "$GITHUB_OUTPUT"
-          echo "is_release=true"    >> "$GITHUB_OUTPUT"
+          do_bump "$BUMP"
 
   # -----------------------------------------------------------------
   # 2. Build the .app, sign ad-hoc, package as DMG.
