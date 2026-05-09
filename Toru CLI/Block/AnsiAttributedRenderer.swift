@@ -46,6 +46,51 @@ final class AnsiAttributedRenderer {
     private var style = Style()
     private var col: Int = 0
 
+    /// Mini terminal-screen emulator running parallel to the streaming
+    /// path. We feed every chunk into both — the streamer produces the
+    /// live `AttributedString` for `Block.output` while the command
+    /// runs (gives the user fast colored feedback even on long-running
+    /// commands), and the grid produces the *correct* layout when the
+    /// command exits, used to overwrite the streamed output for blocks
+    /// that flagged `usedCursorMoves`. Resets per command via
+    /// `resetGrid()`.
+    let grid = GridEmulator()
+
+    /// Latched `true` whenever a non-SGR CSI final byte goes by — i.e. a
+    /// cursor move (`A`/`B`/`C`/`D`/`H`/`f`/`G`/`E`/`F`), an erase
+    /// (`J`/`K`), insert/delete-line (`L`/`M`), etc. The streaming path
+    /// drops these sequences, so any block that uses them ends up with
+    /// a flat-appended transcript that doesn't match what the user saw
+    /// (neofetch logo overlap, claude TUI redraws, ascii art).
+    /// `BlockStore` checks this between chunks and tags the running
+    /// block; `ShellBridge.captureFinalOutput` then knows to replace
+    /// the streamed output with a buffer snapshot at finalize. Plain
+    /// commands (`ls`, `git status`, `echo`) never set this flag and
+    /// keep their colored streamed output untouched.
+    private(set) var didSeeCursorMove: Bool = false
+
+    /// Returns the current value and clears the flag in a single read.
+    /// Tap callers poll once per chunk so we know which block to tag.
+    func consumeCursorMoveFlag() -> Bool {
+        let v = didSeeCursorMove
+        didSeeCursorMove = false
+        return v
+    }
+
+    /// Latched `true` when SwiftTerm switches to the alternate screen
+    /// buffer via `CSI ?1049h` / `?1047h` / `?47h` — i.e. a TUI took
+    /// over the terminal (vim, htop, less, claude code, fzf). The
+    /// stream during that time is full of CSI redraws that look like
+    /// garbage in a flat transcript, so `BlockStore` clears the block's
+    /// output entirely once it sees this flag.
+    private(set) var didEnterAltScreen: Bool = false
+
+    func consumeAltScreenFlag() -> Bool {
+        let v = didEnterAltScreen
+        didEnterAltScreen = false
+        return v
+    }
+
     // MARK: - Parser state machine
 
     private enum State { case text, esc, csi, osc }
@@ -59,8 +104,11 @@ final class AnsiAttributedRenderer {
     // MARK: - Public API
 
     /// Feed a chunk of raw PTY bytes; returns an AttributedString
-    /// containing all the styled text from this chunk.
+    /// containing all the styled text from this chunk. Also feeds the
+    /// same bytes through the parallel `GridEmulator` so we have a
+    /// correct-layout copy ready when the block finalizes.
     func feed(_ bytes: [UInt8]) -> AttributedString {
+        grid.feed(bytes)
         var out = AttributedString()
         for b in bytes {
             switch state {
@@ -72,6 +120,13 @@ final class AnsiAttributedRenderer {
         }
         flushPending(into: &out)
         return out
+    }
+
+    /// Resets the grid emulator's screen + cursor for a fresh command.
+    /// Called from `handleSubmit` / `rerun` before sending bytes so the
+    /// new command's output starts at row 0 of an empty grid.
+    func resetGrid() {
+        grid.reset()
     }
 
     // MARK: - Byte handlers
@@ -124,9 +179,19 @@ final class AnsiAttributedRenderer {
             return
         }
         if b >= 0x40 && b <= 0x7E {
-            // Final byte. Only act on 'm' (SGR); drop everything else.
+            // Final byte. Only act on 'm' (SGR); drop everything else,
+            // but latch flags for sequences callers care about.
             if b == 0x6D {  // 'm'
                 applySGR(parseParams(paramBuf))
+            } else if b == 0x68 {  // 'h' — Set Mode (DECSET when private)
+                let p = String(bytes: paramBuf, encoding: .ascii) ?? ""
+                if p == "?1049" || p == "?1047" || p == "?47" {
+                    didEnterAltScreen = true
+                } else {
+                    didSeeCursorMove = true
+                }
+            } else {
+                didSeeCursorMove = true
             }
             state = .text
             paramBuf.removeAll(keepingCapacity: true)

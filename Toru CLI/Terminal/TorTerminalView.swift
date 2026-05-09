@@ -271,6 +271,62 @@ final class TorTerminalView: LocalProcessTerminalView {
         }
     }
 
+    // MARK: - Layout metrics (used by ActiveCellView for content-driven height)
+
+    /// Approximate point height of one terminal row, derived from the
+    /// current monospaced font's default line height. Same metric SwiftTerm
+    /// uses internally to lay out rows.
+    var rowHeightPoints: CGFloat {
+        NSLayoutManager().defaultLineHeight(for: font)
+    }
+
+    /// `true` when the foreground program has switched to the alternate
+    /// screen buffer (vim, htop, less, fzf, …). The bottom cell expands to
+    /// its full cap when this is set so the TUI has room to render.
+    var isAlternateScreen: Bool {
+        getTerminal().isCurrentBufferAlternate
+    }
+
+    /// Best-effort absolute row index of the cursor in scrollback +
+    /// active screen, computed as `yDisp + y`. Walks monotonically while
+    /// the auto-follow viewport is at the bottom (it always is during an
+    /// active command), so `current - baselineAtCommandStart + 1` is the
+    /// number of rows the running command has consumed.
+    var absoluteCursorRow: Int {
+        let buf = getTerminal().buffer
+        return buf.yDisp + buf.y
+    }
+
+    /// Plain-text snapshot of the current buffer between `startRow`
+    /// (absolute) and the cursor's current absolute row, with the
+    /// echoed command line skipped and trailing whitespace/blank rows
+    /// trimmed.
+    ///
+    /// Used by `ShellBridge` when finalizing a block so cursor-positioned
+    /// output (neofetch, claude, ascii art that overwrites earlier
+    /// rows) reflects the on-screen state instead of the raw streamed
+    /// bytes — `AnsiAttributedRenderer` drops CSI cursor moves, which
+    /// makes the streamed transcript look corrupted for these programs.
+    /// SwiftTerm's buffer is the authoritative rendered state.
+    func captureOutput(fromAbsoluteRow startRow: Int) -> String {
+        let term = getTerminal()
+        let endRow = term.buffer.yDisp + term.buffer.y
+        guard endRow >= startRow else { return "" }
+        let cols = max(1, term.cols)
+        let start = Position(col: 0, row: max(0, startRow))
+        let end = Position(col: cols - 1, row: endRow)
+        var text = term.getText(start: start, end: end)
+        // First line is the prompt-with-typed-command — the block
+        // header already renders the command, so drop it.
+        if let firstNL = text.firstIndex(of: "\n") {
+            text = String(text[text.index(after: firstNL)...])
+        }
+        while let last = text.last, last.isNewline || last == " " {
+            text.removeLast()
+        }
+        return text
+    }
+
     // Note: SwiftTerm's `sizeChanged(source:newCols:newRows:)` is not
     // `open`, so we can't override it. Since the NSView stays 0×0 the
     // delegate only fires once with cols=0/rows=0 at startup; our

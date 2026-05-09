@@ -14,6 +14,10 @@ import AppKit
 struct BlockRowView: View {
     @ObservedObject var block: Block
     var isLocked: Bool = false
+    /// Active search term. When non-empty, occurrences in both the
+    /// command and output get a yellow background highlight (case-
+    /// insensitive). Empty string disables highlighting.
+    var searchQuery: String = ""
     var onRerun: ((Block) -> Void)? = nil
     var onDelete: ((Block) -> Void)? = nil
 
@@ -94,10 +98,10 @@ struct BlockRowView: View {
 
             Group {
                 if isLocked {
-                    Text(block.command)
+                    Text(highlightedCommand)
                         .textSelection(.disabled)
                 } else {
-                    Text(block.command)
+                    Text(highlightedCommand)
                         .textSelection(.enabled)
                 }
             }
@@ -164,9 +168,9 @@ struct BlockRowView: View {
         // expanded inside the renderer.
         Group {
             if isLocked {
-                Text(block.output).textSelection(.disabled)
+                Text(highlightedOutput).textSelection(.disabled)
             } else {
-                Text(block.output).textSelection(.enabled)
+                Text(highlightedOutput).textSelection(.enabled)
             }
         }
         .font(.system(size: 12, design: .monospaced))
@@ -191,6 +195,45 @@ struct BlockRowView: View {
     private var borderColor: Color {
         if block.isRunning && isLocked { return Color.orange.opacity(0.4) }
         return Color.white.opacity(0.06)
+    }
+
+    // MARK: - Search highlight
+
+    private var highlightedCommand: AttributedString {
+        highlight(AttributedString(block.command), query: searchQuery)
+    }
+
+    private var highlightedOutput: AttributedString {
+        highlight(block.output, query: searchQuery)
+    }
+
+    /// Adds a yellow background to every case-insensitive occurrence of
+    /// `query` in `source`. Range mapping uses character offsets, which
+    /// match between `String` and `AttributedString` for plain ASCII /
+    /// monospaced terminal output (the only flavor we render here).
+    private func highlight(_ source: AttributedString, query: String) -> AttributedString {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return source }
+        var result = source
+        let plain = String(source.characters)
+        let lowerPlain = plain.lowercased()
+        let lowerQuery = q.lowercased()
+        var cursor = lowerPlain.startIndex
+        while let range = lowerPlain.range(of: lowerQuery,
+                                           range: cursor..<lowerPlain.endIndex) {
+            let startOff = plain.distance(from: plain.startIndex, to: range.lowerBound)
+            let endOff   = plain.distance(from: plain.startIndex, to: range.upperBound)
+            let totalChars = plain.count
+            guard endOff <= totalChars else { break }
+            let aStart = result.index(result.startIndex,
+                                      offsetByCharacters: startOff)
+            let aEnd = result.index(result.startIndex,
+                                    offsetByCharacters: endOff)
+            result[aStart..<aEnd].backgroundColor = Color.yellow.opacity(0.55)
+            result[aStart..<aEnd].foregroundColor = Color.black
+            cursor = range.upperBound
+        }
+        return result
     }
 
     private func copy(_ s: String) {

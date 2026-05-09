@@ -10,16 +10,40 @@ final class Block: Identifiable, ObservableObject {
     let command: String
     let startedAt = Date()
 
+    /// Absolute cursor row in the terminal (`yDisp + y`) at the moment
+    /// this command was submitted. Used as the zero point for content-
+    /// driven height growth in `ActiveCellView` — `currentRow - this + 1`
+    /// = visible rows the running command has consumed.
+    let startCursorRow: Int
+
     @Published var output: AttributedString = AttributedString()
     @Published var isRunning: Bool = true
     @Published var exitCode: Int? = nil
 
+    /// `true` once the streaming renderer reports that this command
+    /// emitted CSI cursor moves / clears (neofetch, ascii art, fancy
+    /// progress bars). Currently informational — we keep the streamed
+    /// colored output anyway since stripping color hurts more than the
+    /// occasional layout quirk.
+    var usedCursorMoves: Bool = false
+
+    /// `true` once SwiftTerm switched to the alternate screen buffer
+    /// during this command's run (vim, htop, less, claude code, fzf).
+    /// `BlockStore.markCurrentDone` clears the streamed output for
+    /// these blocks because the live transcript is just thousands of
+    /// CSI redraws that look like garbage when flat-appended.
+    var usedAlternateScreen: Bool = false
+
     private var notifyScheduled = false
 
-    init(command: String, output: AttributedString = AttributedString(), isRunning: Bool = true) {
+    init(command: String,
+         output: AttributedString = AttributedString(),
+         isRunning: Bool = true,
+         startCursorRow: Int = 0) {
         self.command = command
         self.output = output
         self.isRunning = isRunning
+        self.startCursorRow = startCursorRow
     }
 
     func append(_ chunk: AttributedString) {
@@ -52,14 +76,27 @@ final class BlockStore: ObservableObject {
     @Published private(set) var streamTick: Int = 0
     private var streamTickScheduled = false
 
-    func startBlock(command: String) {
-        blocks.append(Block(command: command))
+    func startBlock(command: String, startCursorRow: Int = 0) {
+        blocks.append(Block(command: command, startCursorRow: startCursorRow))
     }
 
     /// Live-append a styled chunk into the most recent running block.
     func appendToCurrent(_ chunk: AttributedString) {
         blocks.last?.append(chunk)
         scheduleStreamTick()
+    }
+
+    /// Tags the current running block as having used CSI cursor moves
+    /// / clears. Called by the byte-tap whenever the renderer's per-
+    /// chunk flag was set.
+    func markRunningBlockCursorPositioned() {
+        blocks.last?.usedCursorMoves = true
+    }
+
+    /// Tags the current running block as a TUI session that used the
+    /// alternate screen buffer.
+    func markRunningBlockAlternateScreen() {
+        blocks.last?.usedAlternateScreen = true
     }
 
     private func scheduleStreamTick() {
@@ -72,8 +109,26 @@ final class BlockStore: ObservableObject {
         }
     }
 
+    /// Finalizes the running block.
+    ///
+    /// Cursor-positioned commands on the *main* screen (neofetch, ascii
+    /// art, progress bars) keep their live-streamed colored
+    /// `AttributedString` even though the streaming renderer drops CSI
+    /// cursor moves — color preservation matters more to the user than
+    /// pixel-perfect logo positioning.
+    ///
+    /// Commands that switched to the *alternate* screen (vim, htop,
+    /// less, claude code, fzf) get their output cleared with a small
+    /// italic marker — the streamed transcript for those is just
+    /// thousands of redraws that look like garbage.
     func markCurrentDone(exitCode: Int? = nil) {
         guard let cur = blocks.last, cur.isRunning else { return }
+        if cur.usedAlternateScreen {
+            var marker = AttributedString("(interactive session)")
+            marker.foregroundColor = .secondary
+            marker.font = .system(size: 12, design: .monospaced).italic()
+            cur.output = marker
+        }
         cur.markDone(exitCode: exitCode)
         objectWillChange.send()
     }
@@ -93,7 +148,10 @@ final class BlockStore: ObservableObject {
     func appendMarker(_ text: String) {
         var styled = AttributedString(text)
         styled.foregroundColor = .secondary
-        let m = Block(command: text, output: AttributedString(), isRunning: false)
+        let m = Block(command: text,
+                      output: AttributedString(),
+                      isRunning: false,
+                      startCursorRow: 0)
         blocks.append(m)
         _ = styled
     }

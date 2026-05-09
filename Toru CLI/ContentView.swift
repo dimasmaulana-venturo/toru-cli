@@ -84,35 +84,6 @@ struct SessionPaneView: View {
     @ObservedObject var tab: TabState
     @ObservedObject var themeManager: ThemeManager
 
-    private static let interactiveSingles: Set<String> = [
-        "claude", "opencode",
-        "vim", "nvim", "nano",
-        "htop", "top", "btop", "atop",
-        "less", "more", "man",
-        "fzf", "lazygit", "lazydocker", "k9s",
-        "tmux", "screen",
-        "ssh", "telnet",
-        "python", "python3", "irb", "pry", "node",
-        "expo", "metro"
-    ]
-    private static let interactivePairs: Set<String> = [
-        "npm init",
-        "yarn create", "pnpm create", "bun create",
-        "git rebase", "git commit", "git add",
-        "docker run",
-        // Dev servers: bun start / npm run dev / etc — they read raw
-        // keystrokes (s = switch dev client, r = reload, a/i = open
-        // device, etc.) so users need a real terminal surface.
-        "bun start", "bun dev", "bun run",
-        "npm start", "npm run", "npm test",
-        "pnpm start", "pnpm run", "pnpm dev", "pnpm test",
-        "yarn start", "yarn run", "yarn dev", "yarn test",
-        "expo start", "npx expo", "bunx expo",
-        "vite", "next dev", "next start",
-        "rails server", "rails console", "rails s", "rails c",
-        "mix phx.server", "iex"
-    ]
-
     /// Live cwd for the foreground process of `tab`'s shell, queried via
     /// `tcgetpgrp` + `proc_pidinfo`. Falls back to `$HOME` when the shell
     /// isn't ready yet.
@@ -135,19 +106,6 @@ struct SessionPaneView: View {
         }
     }
 
-    private static func isInteractive(command cmd: String) -> Bool {
-        let parts = cmd.trimmingCharacters(in: .whitespaces)
-            .split(separator: " ", omittingEmptySubsequences: true)
-            .map(String.init)
-        guard let first = parts.first else { return false }
-        if interactiveSingles.contains(first) { return true }
-        if parts.count >= 2 {
-            let two = "\(first) \(parts[1])"
-            if interactivePairs.contains(two) { return true }
-        }
-        return false
-    }
-
     private var mode: TerminalMode { tab.shellBridge.terminalMode }
 
     @State private var searchQuery: String = ""
@@ -160,37 +118,30 @@ struct SessionPaneView: View {
                 searchBar
             }
 
+            // Block list = finalized history only. The currently-running
+            // block is hidden here and rendered inside the bottom
+            // `ActiveCellView` instead, so it appears to "detach" into the
+            // history list when the command exits.
             BlockListView(
                 blockStore: tab.blockStore,
                 isLocked: false,
                 searchQuery: showSearch ? searchQuery : "",
+                showRunning: false,
                 onRerun: rerun,
                 onDelete: deleteBlock
             )
-            .frame(maxWidth: .infinity, maxHeight: mode == .idle ? .infinity : 0)
-            .opacity(mode == .idle ? 1 : 0)
-            .clipped()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
-                .opacity(mode == .idle ? 0.08 : 0)
-
-            EmbeddedTerminalView(host: tab.host)
-                .frame(maxWidth: .infinity, maxHeight: mode == .idle ? 0 : .infinity, alignment: .top)
-                .opacity(mode == .idle ? 0 : 1)
-                .allowsHitTesting(mode != .idle)
-                .clipped()
-
-            if mode == .idle {
-                StatusRowView(tab: tab)
-                    .transition(.opacity)
-                InputBarView(
-                    onSubmit: handleSubmit,
-                    onCtrlC: { tab.shellBridge.sendRaw(Data([0x03])) },
-                    cwdProvider: { Self.cwd(for: tab) }
-                )
-                .frame(height: 44)
-                .transition(.opacity)
-            }
+            // Bottom morphing cell: TextField → live SwiftTerm → snapshot
+            // back into the block list above when the command exits.
+            ActiveCellView(
+                tab: tab,
+                blockStore: tab.blockStore,
+                shellBridge: tab.shellBridge,
+                onSubmit: handleSubmit,
+                onCtrlC: { tab.shellBridge.sendRaw(Data([0x03])) },
+                cwdProvider: { Self.cwd(for: tab) }
+            )
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .animation(.easeInOut(duration: 0.2), value: mode)
@@ -305,7 +256,6 @@ struct SessionPaneView: View {
         DispatchQueue.main.async {
             let trimmed = cmd.trimmingCharacters(in: .whitespaces)
 
-            // Persist to SQLite history (deduped + skips ` `-leading rawInput).
             HistoryDatabase.shared.record(
                 rawInput: cmd,
                 executed: trimmed,
@@ -321,13 +271,21 @@ struct SessionPaneView: View {
                 return
             }
 
-            tab.blockStore.startBlock(command: cmd)
-            tab.shellBridge.activeCommand =
-                cmd.split(separator: " ").first.map(String.init)
+            let baseline = tab.host.terminal.absoluteCursorRow
+            tab.blockStore.startBlock(command: cmd, startCursorRow: baseline)
+            tab.shellBridge.activeCommand = trimmed
+            // Tab title reflects the running command so a multi-tab
+            // setup is scannable (e.g. `bun start`, `npm run dev`).
+            // Restored to `defaultTitle` in `handleModeChange` when the
+            // shell returns to its prompt.
+            tab.title = trimmed.isEmpty ? tab.defaultTitle : trimmed
             tab.shellBridge.send(command: cmd)
-            if Self.isInteractive(command: cmd) {
-                tab.shellBridge.forceMode(.fullTUI)
-            }
+            // Quick one-shot recompute so commands taking >~50ms swap
+            // into the live terminal surface without waiting a full
+            // poll interval. Instant commands (`ls`, `cd`) have already
+            // returned to the prompt by the nudge tick — they stay in
+            // `.idle`, which is what kills the previous flash glitch.
+            tab.shellBridge.nudgePoll()
         }
     }
 
@@ -336,7 +294,7 @@ struct SessionPaneView: View {
     private func handleModeChange(_ new: TerminalMode) {
         DispatchQueue.main.async {
             switch new {
-            case .fullTUI:
+            case .running:
                 if let v = tab.shellBridge.view {
                     v.window?.makeFirstResponder(v)
                     if let prog = tab.shellBridge.activeCommand {
@@ -345,6 +303,9 @@ struct SessionPaneView: View {
                 }
             case .idle:
                 tab.shellBridge.view?.window?.title = "Toru"
+                // Restore the tab's permanent title once the running
+                // command exits.
+                tab.title = tab.defaultTitle
             }
         }
     }
@@ -374,13 +335,16 @@ struct SessionPaneView: View {
         guard mode == .idle else { return }
         let cmd = block.command
         DispatchQueue.main.async {
-            tab.blockStore.startBlock(command: cmd)
-            tab.shellBridge.activeCommand =
-                cmd.split(separator: " ").first.map(String.init)
+            let baseline = tab.host.terminal.absoluteCursorRow
+            tab.blockStore.startBlock(command: cmd, startCursorRow: baseline)
+            tab.shellBridge.activeCommand = cmd
+            tab.title = cmd.isEmpty ? tab.defaultTitle : cmd
+            // Fresh grid for this command. Streamed renderer state
+            // (SGR style, parser FSM) carries over intentionally — it
+            // tracks the *terminal*, not a single block.
+            tab.renderer.resetGrid()
             tab.shellBridge.send(command: cmd)
-            if Self.isInteractive(command: cmd) {
-                tab.shellBridge.forceMode(.fullTUI)
-            }
+            tab.shellBridge.nudgePoll()
         }
     }
 

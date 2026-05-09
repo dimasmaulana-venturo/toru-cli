@@ -7,6 +7,9 @@ import AppKit
 final class TabState: Identifiable, ObservableObject {
     let id = UUID()
     @Published var title: String
+    /// Title to revert to when the running command exits — preserves
+    /// the original "Tab N" / user-renamed name across run cycles.
+    let defaultTitle: String
     let createdAt = Date()
 
     let shellBridge = ShellBridge()
@@ -17,10 +20,11 @@ final class TabState: Identifiable, ObservableObject {
     private var ptyWired = false
     private var lastCols: Int = -1
     private var lastRows: Int = -1
-    private let renderer = AnsiAttributedRenderer()
+    let renderer = AnsiAttributedRenderer()
 
     init(title: String) {
         self.title = title
+        self.defaultTitle = title
         self.host = PaddedTerminalHost(
             insets: NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         )
@@ -33,52 +37,31 @@ final class TabState: Identifiable, ObservableObject {
         host.terminal.startShell()
         shellBridge.view = host.terminal
         shellBridge.blockStore = blockStore
+        shellBridge.renderer = renderer
         wirePtyTap()
         startPolling()
     }
 
     private func wirePtyTap() {
-        let bridge = shellBridge
         let store = blockStore
-        var tail = ""
         host.terminal.onPtyBytes = { [weak self] bytes in
             guard let self else { return }
-            let chunk = String(decoding: bytes, as: UTF8.self)
-            let scan = tail + chunk
-            let altOn  = scan.contains("\u{1B}[?1049h")
-                      || scan.contains("\u{1B}[?1047h")
-                      || scan.contains("\u{1B}[?47h")
-            let altOff = scan.contains("\u{1B}[?1049l")
-                      || scan.contains("\u{1B}[?1047l")
-                      || scan.contains("\u{1B}[?47l")
-            tail = String(scan.suffix(16))
-
-            if altOn {
-                Task { @MainActor in
-                    if !bridge.altScreenActive {
-                        bridge.altScreenActive = true
-                        store.clearAll()
-                        bridge.terminalMode = .fullTUI
-                    }
-                }
-            }
-            if altOff {
-                Task { @MainActor in
-                    if bridge.altScreenActive {
-                        bridge.altScreenActive = false
-                        store.appendMarker("─── session resumed ───")
-                    }
-                }
-            }
-
-            let isFull = MainActor.assumeIsolated { bridge.terminalMode == .fullTUI }
-            if isFull { return }
-
+            // Always feed bytes through the ANSI renderer and capture
+            // them on the running block. SwiftTerm renders the same
+            // bytes live in the visible terminal during `.running`; the
+            // captured AttributedString is what survives as the block's
+            // final output once the command exits.
             let bytesCopy = Array(bytes)
             Task { @MainActor in
                 let attr = self.renderer.feed(bytesCopy)
                 if !attr.characters.isEmpty {
                     store.appendToCurrent(attr)
+                }
+                if self.renderer.consumeCursorMoveFlag() {
+                    store.markRunningBlockCursorPositioned()
+                }
+                if self.renderer.consumeAltScreenFlag() {
+                    store.markRunningBlockAlternateScreen()
                 }
             }
         }
@@ -87,13 +70,12 @@ final class TabState: Identifiable, ObservableObject {
     private func startPolling() {
         pollTimer?.invalidate()
         let bridge = shellBridge
-        let timer = Timer(timeInterval: 0.2, repeats: true) {
+        let timer = Timer(timeInterval: 0.1, repeats: true) {
             [weak terminal = host.terminal] _ in
             guard let terminal = terminal else { return }
             let atPrompt = terminal.isShellAtPrompt()
-            let rawMode = terminal.childInRawMode()
             MainActor.assumeIsolated {
-                bridge.recomputeMode(atPrompt: atPrompt, rawMode: rawMode)
+                bridge.recomputeMode(atPrompt: atPrompt)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
