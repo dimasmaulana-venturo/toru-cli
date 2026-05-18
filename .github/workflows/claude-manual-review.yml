@@ -15,7 +15,7 @@ on:
 
 jobs:
   review:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     environment: claude-code
     permissions:
       contents: read
