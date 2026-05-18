@@ -1,0 +1,150 @@
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    if: |
+      (
+        github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@claude') &&
+        (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@claude') &&
+        (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')
+      ) ||
+      (
+        github.event_name == 'pull_request_review' &&
+        contains(github.event.review.body, '@claude') &&
+        (github.event.review.author_association == 'OWNER' || github.event.review.author_association == 'MEMBER' || github.event.review.author_association == 'COLLABORATOR')
+      ) ||
+      (
+        github.event_name == 'issues' &&
+        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+        (github.event.issue.author_association == 'OWNER' || github.event.issue.author_association == 'MEMBER' || github.event.issue.author_association == 'COLLABORATOR')
+      )
+    runs-on: self-hosted
+    environment: claude-code
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read # Required for Claude to read CI results on PRs
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Inject Dynamic Framework Skill
+        run: |
+          # Detect framework from checked-out repo (local file check)
+          FRAMEWORK="generic"
+          if [ -f pubspec.yaml ]; then
+            FRAMEWORK="flutter"
+          elif [ -f go.mod ]; then
+            FRAMEWORK="golang"
+          elif [ -f package.json ]; then
+            if grep -q '"react-native"' package.json 2>/dev/null || grep -q "'react-native'" package.json 2>/dev/null; then
+              FRAMEWORK="react-native"
+            elif grep -q '"react"' package.json 2>/dev/null || grep -q "'react'" package.json 2>/dev/null; then
+              FRAMEWORK="react"
+            else
+              FRAMEWORK="node"
+            fi
+          elif find . -maxdepth 3 -name "*.kt" -print -quit | grep -q .; then
+            FRAMEWORK="kotlin"
+          elif find . -maxdepth 3 -name "*.swift" -print -quit | grep -q .; then
+            FRAMEWORK="ios-swift"
+          fi
+          echo "Detected framework: $FRAMEWORK"
+
+          SYSTEM_PROMPT=""
+
+          # Fetch caveman rules from backend
+          CAVEMAN=$(curl -sf "http://localhost:8080/skills/caveman/SKILL.md" 2>/dev/null) || true
+          if [ -n "$CAVEMAN" ]; then
+            echo "Caveman rules fetched"
+            SYSTEM_PROMPT="$CAVEMAN"
+          fi
+
+          # Fetch framework skill from backend
+          FRAMEWORK_SKILL=$(curl -sf "http://localhost:8080/api/dynamic-skill?framework=$FRAMEWORK" 2>/dev/null) || true
+          if [ -n "$FRAMEWORK_SKILL" ]; then
+            echo "Framework skill fetched for: $FRAMEWORK"
+            SYSTEM_PROMPT="${SYSTEM_PROMPT}"$'\n\n'"${FRAMEWORK_SKILL}"
+          else
+            echo "No framework skill available for $FRAMEWORK, skipping"
+          fi
+
+          # Fetch laporan rules from backend
+          LAPORAN=$(curl -sf "http://localhost:8080/skills/laporan/SKILL.md" 2>/dev/null) || true
+          if [ -n "$LAPORAN" ]; then
+            echo "Laporan rules fetched"
+            SYSTEM_PROMPT="${SYSTEM_PROMPT}"$'\n\n'"${LAPORAN}"
+          fi
+
+          # Write combined content to APPEND_SYSTEM_PROMPT
+          if [ -n "$SYSTEM_PROMPT" ]; then
+            echo "APPEND_SYSTEM_PROMPT<<EOF" >> $GITHUB_ENV
+            echo "$SYSTEM_PROMPT" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            echo "APPEND_SYSTEM_PROMPT set"
+          fi
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # This is an optional setting that allows Claude to read CI results on PRs
+          additional_permissions: |
+            actions: read
+
+          # Optional: Add claude_args to customize behavior and configuration
+          # We MUST include the default MCP tools (Read, Glob, LS, mcp__github_comment...)
+          # otherwise they get overridden and Claude cannot post the review comment.
+          claude_args: '--allowed-tools "Glob,Grep,LS,Read,mcp__github_comment__update_claude_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log,Bash"'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          APPEND_SYSTEM_PROMPT: ${{ env.APPEND_SYSTEM_PROMPT }}
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Post-Review Actions (Discord Notify)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          CLAUDE_DONE_SECRET: ${{ secrets.CLAUDE_DONE_SECRET }}
+        run: |
+          PR_NUMBER="${{ github.event.issue.number || github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "0" ]; then
+            echo "No PR number found, skipping post-review actions"
+            exit 0
+          fi
+
+          # Notify PR service → triggers Discord notification (service handles draft→ready based on verdict)
+          echo "Notifying PR service..."
+          curl -sf -X POST "http://localhost:8080/webhook/claude-done" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $CLAUDE_DONE_SECRET" \
+            -d "{\"repo\":\"$REPO\",\"pr\":$PR_NUMBER}" \
+            && echo "Service notified successfully" \
+            || echo "Service notification failed (non-fatal)"
+
