@@ -12,6 +12,10 @@ on:
         required: false
         default: 'Review the codebase. Focus on code quality, security, and best practices.'
         type: string
+      review_run_id:
+        description: 'Internal review_run UUID from the code-review service'
+        required: false
+        type: string
 
 jobs:
   review:
@@ -80,6 +84,7 @@ jobs:
           fi
 
       - name: Run Claude Review
+        id: claude_review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -95,12 +100,56 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           APPEND_SYSTEM_PROMPT: ${{ env.APPEND_SYSTEM_PROMPT }}
 
+      - name: Resolve comment metadata
+        id: comment_meta
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          # claude-code-action posts a comment on the triggering PR when run
+          # in a PR context. For workflow_dispatch on a branch there is no PR,
+          # so the action creates a GitHub issue instead. We look for the most
+          # recently updated issue whose title matches our pattern, then grab
+          # its first comment (the body is posted as comment #1 by github-actions bot).
+          ISSUE_URL=$(gh issue list --label "claude-review" --state open --json url,title \
+            --jq '[.[] | select(.title | startswith("[Claude Review] ${{ inputs.branch }}"))] | first | .url' 2>/dev/null || true)
+
+          COMMENT_ID=""
+          COMMENT_URL=""
+
+          if [ -n "$ISSUE_URL" ]; then
+            # Fetch the issue number from the URL.
+            ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
+            # The issue body is the first "comment" — use the issue itself (id comes from API).
+            ISSUE_JSON=$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null || true)
+            COMMENT_ID=$(echo "$ISSUE_JSON" | jq -r '.id // empty')
+            COMMENT_URL="$ISSUE_URL"
+          fi
+
+          echo "comment_id=${COMMENT_ID}" >> $GITHUB_OUTPUT
+          echo "comment_url=${COMMENT_URL}" >> $GITHUB_OUTPUT
+
       - name: Notify Completion
         if: always()
         env:
           CLAUDE_DONE_SECRET: ${{ secrets.CLAUDE_DONE_SECRET }}
         run: |
+          COMMENT_ID="${{ steps.comment_meta.outputs.comment_id }}"
+          COMMENT_URL="${{ steps.comment_meta.outputs.comment_url }}"
+          REVIEW_RUN_ID="${{ inputs.review_run_id }}"
+
+          PAYLOAD="{\"review_run_id\":\"${REVIEW_RUN_ID}\",\"repo\":\"${{ github.repository }}\",\"branch\":\"${{ inputs.branch }}\",\"status\":\"${{ job.status }}\",\"run_id\":${{ github.run_id }}"
+
+          if [ -n "$COMMENT_ID" ]; then
+            PAYLOAD="${PAYLOAD},\"pr_comment_id\":${COMMENT_ID}"
+          fi
+          if [ -n "$COMMENT_URL" ]; then
+            PAYLOAD="${PAYLOAD},\"pr_comment_url\":\"${COMMENT_URL}\""
+          fi
+
+          PAYLOAD="${PAYLOAD}}"
+
           curl -sf -X POST "http://localhost:8080/webhook/manual-review-done" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $CLAUDE_DONE_SECRET" \
-            -d "{\"repo\":\"${{ github.repository }}\",\"branch\":\"${{ inputs.branch }}\",\"status\":\"${{ job.status }}\",\"run_id\":${{ github.run_id }}}"
+            -d "$PAYLOAD"
