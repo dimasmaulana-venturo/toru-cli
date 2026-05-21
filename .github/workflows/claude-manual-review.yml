@@ -16,6 +16,11 @@ on:
         description: 'Internal review_run UUID from the code-review service'
         required: false
         type: string
+      review_type_label:
+        description: 'Display label for the review type (e.g. Quality Gate, Security Review)'
+        required: false
+        default: 'Manual Review'
+        type: string
 
 jobs:
   review:
@@ -92,7 +97,7 @@ jobs:
             ${{ inputs.prompt }}
 
             After completing the review, create a GitHub issue in this repository using the `gh` CLI.
-            Issue title: "[Claude Review] ${{ inputs.branch }}"
+            Issue title: "[Claude Review] ${{ inputs.branch }} - ${{ inputs.review_type_label }}"
             Label the issue with "claude-review" (create the label first if it doesn't exist: `gh label create claude-review --color 0E8A16 --description "Automated Claude review report" 2>/dev/null || true`).
             The issue body must be a single consolidated report in markdown format.
           claude_args: '--allowed-tools "Glob,Grep,LS,Read,Bash"'
@@ -111,7 +116,7 @@ jobs:
           # NUMBER (small int from URL like /issues/8 → 8) so BE can fetch
           # the body via /repos/{owner}/{repo}/issues/{number}.
           ISSUE_URL=$(gh issue list --label "claude-review" --state open --json url,title \
-            --jq '[.[] | select(.title | startswith("[Claude Review] ${{ inputs.branch }}"))] | first | .url' 2>/dev/null || true)
+            --jq '[.[] | select(.title | startswith("[Claude Review] ${{ inputs.branch }} - ${{ inputs.review_type_label }}"))] | first | .url' 2>/dev/null || true)
 
           ISSUE_NUMBER=""
           if [ -n "$ISSUE_URL" ]; then
